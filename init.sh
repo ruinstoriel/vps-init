@@ -43,8 +43,9 @@ cp $SSHD_CONFIG "${SSHD_CONFIG}.bak"
 sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' $SSHD_CONFIG
 sed -i 's/^#\?ChallengeResponseAuthentication.*/ChallengeResponseAuthentication no/' $SSHD_CONFIG
 sed -i 's/^#\?KbdInteractiveAuthentication.*/KbdInteractiveAuthentication no/' $SSHD_CONFIG
-# Disable PAM
-sed -i 's/^#\?UsePAM.*/UsePAM no/' $SSHD_CONFIG
+# Disable PAM 
+# WARNING: 'UsePAM no' is not supported in RHEL and may cause several problems.
+# sed -i 's/^#\?UsePAM.*/UsePAM no/' $SSHD_CONFIG
 
 # Disable Root Password Login (Allow keys)
 # 'prohibit-password' is the default in many modern distros but let's enforce it
@@ -133,9 +134,8 @@ else
     mkdir -p /etc/sysconfig
 fi
 
-# 3.5. Enable IPv6
+# 3.5. Diable IPv6 autoconfig and router advertisements
 echo "Configuring IPv6..."
-# Enable IPv6 autoconfig and router advertisements
 sysctl -w net.ipv6.conf.all.autoconf=0
 sysctl -w net.ipv6.conf.all.accept_ra=0
 sysctl -w net.ipv6.conf.eth0.autoconf=0
@@ -165,7 +165,7 @@ net.ipv6.conf.$PRIMARY_IF.accept_ra = 0
 EOF
 fi
 
-echo "IPv6 enabled."
+echo "IPv6 autoconfig and router advertisements disabled."
 
 # Check and fix IPv6 disable settings in sysctl.conf
 echo "Checking IPv6 disable settings..."
