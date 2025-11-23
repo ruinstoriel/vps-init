@@ -151,7 +151,7 @@ fi
 
 # Make changes persistent
 cat >> /etc/sysctl.d/99-ipv6.conf << EOF
-# Enable IPv6
+# Disable IPv6 autoconfig and router advertisements
 net.ipv6.conf.all.autoconf = 0
 net.ipv6.conf.all.accept_ra = 0
 net.ipv6.conf.eth0.autoconf = 0
