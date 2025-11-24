@@ -5,9 +5,9 @@
 ## 功能特性
 
 ### 🔐 SSH 安全加固
+- 修改 SSH 端口为 2200（避免默认端口扫描）
 - 自动配置 SSH 公钥认证
 - 禁用密码登录（PasswordAuthentication、ChallengeResponseAuthentication、KbdInteractiveAuthentication）
-- 禁用 PAM 认证
 - 仅允许 root 使用密钥登录（prohibit-password）
 
 ### 🛡️ 防火墙配置
@@ -23,7 +23,7 @@
 
 ### 🔥 默认防火墙规则
 开放端口：
-- **22** - SSH
+- **2200** - SSH
 - **80** - HTTP
 - **443** - HTTPS (TCP + UDP for QUIC)
 
@@ -71,7 +71,7 @@ chmod +x init.sh
 ### 4. 验证配置
 **重要**：在关闭当前 SSH 会话前，请先打开一个新的终端窗口测试 SSH 密钥登录：
 ```bash
-ssh -i ~/.ssh/id_ed25519 root@your_vps_ip
+ssh -p 2200 -i ~/.ssh/id_ed25519 root@your_vps_ip
 ```
 
 确认可以正常登录后再关闭原会话，以免被锁在外面。
