@@ -312,6 +312,10 @@ configure_nftables() {
     # Fix Windows line endings (CRLF) which cause syntax errors
     sed -i 's/\r$//' "$NFT_CONF"
     
+    # Replace SSH_PORT placeholder with actual port
+    sed -i "s/{{SSH_PORT}}/$SSH_PORT/g" "$NFT_CONF"
+    echo "SSH port configured: $SSH_PORT"
+    
     chmod 600 "$NFT_CONF"
     
     # Update shebang in config file to match actual binary location
