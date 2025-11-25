@@ -15,7 +15,7 @@
 # ============================================
 
 # Set to "true" to enable IPv6 configuration, "false" to skip
-ENABLE_IPV6="true"
+ENABLE_IPV6="false"
 
 # Timezone setting
 TIMEZONE="Asia/Shanghai"
@@ -173,7 +173,23 @@ setup_firewall() {
     # Update package list
     $PM $PM_UPDATE
     
-    # Install nftables
+    # Stop and disable other firewalls FIRST
+    echo "Stopping and disabling conflicting firewalls..."
+    systemctl stop ufw 2>/dev/null
+    systemctl disable ufw 2>/dev/null
+    systemctl stop firewalld 2>/dev/null
+    systemctl disable firewalld 2>/dev/null
+    
+    
+    # Remove old firewall packages BEFORE installing nftables
+    echo "Removing old firewall packages..."
+    if [ "$PM" = "apt-get" ]; then
+        $PM $PM_REMOVE ufw firewalld 2>/dev/null
+    else
+        $PM $PM_REMOVE firewalld ufw 2>/dev/null
+    fi
+    
+    # NOW install nftables (won't be affected by removal above)
     echo "Installing nftables..."
     $PM $PM_INSTALL nftables
     
@@ -190,28 +206,6 @@ setup_firewall() {
     if [ ! -x /sbin/nft ] && [ -x "$NFT_BIN" ]; then
         echo "Symlinking $NFT_BIN to /sbin/nft to satisfy systemd..."
         ln -s "$NFT_BIN" /sbin/nft
-    fi
-    
-    # Stop and disable other firewalls
-    echo "Stopping and disabling conflicting firewalls..."
-    systemctl stop ufw 2>/dev/null
-    systemctl disable ufw 2>/dev/null
-    systemctl stop firewalld 2>/dev/null
-    systemctl disable firewalld 2>/dev/null
-    
-    # Flush iptables rules
-    echo "Flushing iptables rules..."
-    iptables -F 2>/dev/null
-    iptables -X 2>/dev/null
-    ip6tables -F 2>/dev/null
-    ip6tables -X 2>/dev/null
-    
-    # Remove old firewall packages
-    echo "Removing old firewall packages..."
-    if [ "$PM" = "apt-get" ]; then
-        $PM $PM_REMOVE iptables ufw firewalld 2>/dev/null
-    else
-        $PM $PM_REMOVE iptables-services firewalld ufw 2>/dev/null
     fi
     
     echo "Firewall migration completed."
@@ -293,6 +287,9 @@ EOF
     if systemctl list-units --type=service | grep -q "network.service"; then
         systemctl restart network 2>/dev/null
         echo "Network service restarted."
+    elif systemctl list-units --type=service | grep -q "networking.service"; then
+        systemctl restart networking 2>/dev/null
+        echo "Networking service restarted."
     fi
 }
 
@@ -320,7 +317,7 @@ configure_nftables() {
     
     # Update shebang in config file to match actual binary location
     sed -i "1s|^#!.*|#!$NFT_BIN -f|" "$NFT_CONF"
-    
+    mkdir -p /etc/nftables.d
     # Enable and start nftables
     systemctl enable nftables
     systemctl restart nftables
