@@ -7,6 +7,7 @@
 # - Timezone configuration
 # - SSH key setup and hardening
 # - Firewall migration from iptables to nftables
+# - Fail2ban installation (configuration required separately)
 # - Optional IPv6 configuration
 # ============================================
 
@@ -325,6 +326,35 @@ configure_nftables() {
     echo "nftables installed and configured successfully."
 }
 
+# Install and configure Fail2ban
+setup_fail2ban() {
+    print_step "Installing Fail2ban..."
+    
+    # Install Fail2ban
+    $PM $PM_INSTALL fail2ban
+    
+    # Verify installation
+    if ! command -v fail2ban-client &> /dev/null; then
+        echo "Error: Fail2ban installation failed."
+        exit 1
+    fi
+    
+    echo "Fail2ban installed successfully."
+    
+    # Remove default configuration in jail.d to prevent startup errors
+    # (Debian/Ubuntu creates defaults-debian.conf which enables sshd by default, 
+    # causing "No file(s) found" error if auth.log is missing)
+    if [ -d /etc/fail2ban/jail.d ]; then
+        rm -f /etc/fail2ban/jail.d/*
+        echo "Cleaned up default configurations in /etc/fail2ban/jail.d/"
+    fi
+    
+    echo "Note: Fail2ban is installed. Default jails have been disabled to prevent errors."
+    echo "Please configure manually in /etc/fail2ban/jail.local"
+}
+
+
+
 # ============================================
 # Main Execution
 # ============================================
@@ -346,6 +376,7 @@ main() {
     setup_firewall
     configure_ipv6
     configure_nftables
+    setup_fail2ban
     
     # Final message
     print_section "VPS Initialization Complete"
@@ -356,6 +387,7 @@ main() {
     echo "  - SSH Authentication: Key-only (password disabled)"
     echo "  - Firewall: nftables (iptables removed)"
     echo "  - IPv6 Configuration: $ENABLE_IPV6"
+    echo "  - Fail2ban: Installed (not configured - configure manually)"
     echo ""
     echo "⚠️  IMPORTANT: VERIFY SSH ACCESS BEFORE CLOSING THIS SESSION!"
     echo ""
