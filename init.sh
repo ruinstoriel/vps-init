@@ -16,7 +16,7 @@
 # ============================================
 
 # Set to "true" to enable IPv6 configuration, "false" to skip
-ENABLE_IPV6="true"
+ENABLE_IPV6="false"
 
 # Timezone setting
 TIMEZONE="Asia/Shanghai"
@@ -356,6 +356,14 @@ setup_fail2ban() {
 banaction = nftables-multiport
 banaction_allports = nftables-allports
 EOF
+
+    # Copy nftables-common.local if it exists
+    if [ -f "./nftables-common.local" ]; then
+        echo "Copying nftables-common.local..."
+        mkdir -p /etc/fail2ban/action.d
+        cp ./nftables-common.local /etc/fail2ban/action.d/nftables-common.local
+        chmod 644 /etc/fail2ban/action.d/nftables-common.local
+    fi
 
     # Enable and start Fail2ban
     systemctl enable fail2ban
