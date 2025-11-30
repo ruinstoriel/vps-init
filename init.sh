@@ -16,7 +16,7 @@
 # ============================================
 
 # Set to "true" to enable IPv6 configuration, "false" to skip
-ENABLE_IPV6="false"
+ENABLE_IPV6="true"
 
 # Timezone setting
 TIMEZONE="Asia/Shanghai"
@@ -349,8 +349,19 @@ setup_fail2ban() {
         echo "Cleaned up default configurations in /etc/fail2ban/jail.d/"
     fi
     
-    echo "Note: Fail2ban is installed. Default jails have been disabled to prevent errors."
-    echo "Please configure manually in /etc/fail2ban/jail.local"
+    # Configure fail2ban to use nftables
+    echo "Configuring Fail2ban to use nftables..."
+    cat > /etc/fail2ban/jail.local <<EOF
+[DEFAULT]
+banaction = nftables-multiport
+banaction_allports = nftables-allports
+EOF
+
+    # Enable and start Fail2ban
+    systemctl enable fail2ban
+    systemctl restart fail2ban
+    
+    echo "Fail2ban configured to use nftables."
 }
 
 
@@ -387,7 +398,7 @@ main() {
     echo "  - SSH Authentication: Key-only (password disabled)"
     echo "  - Firewall: nftables (iptables removed)"
     echo "  - IPv6 Configuration: $ENABLE_IPV6"
-    echo "  - Fail2ban: Installed (not configured - configure manually)"
+    echo "  - Fail2ban: Configured (using nftables)"
     echo ""
     echo "⚠️  IMPORTANT: VERIFY SSH ACCESS BEFORE CLOSING THIS SESSION!"
     echo ""
