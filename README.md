@@ -22,11 +22,20 @@
 - 配置 IPv6 自动配置和路由器通告
 - 确保 IPv6 不被系统禁用
 
+### 🛡️ SYN Flood 检测与防御
+- 自动安装依赖（conntrack-tools、whois）
+- 定时检测 SYN Flood 攻击（每半小时运行一次）
+- 自动识别攻击来源网段
+- 超过阈值自动加入 nftables 黑名单
+- 详细日志记录和监控
+- 详细文档：[SYN-FLOOD-CRON.md](./SYN-FLOOD-CRON.md)
+
 ### 🚫 Fail2ban 入侵防护
 - 自动安装 Fail2ban 包
 - 需要手动配置（提供配置文档参考）
 - 支持与 nftables 集成
 - 可配置 SSH 暴力破解防护
+
 
 ### 🔥 默认防火墙规则
 开放端口：
@@ -103,8 +112,13 @@ ssh -p 2200 -i ~/.ssh/id_ed25519 root@your_vps_ip
 
 - `init.sh` - 主初始化脚本
 - `nftables.conf` - nftables 防火墙规则配置模板（使用 `{{SSH_PORT}}` 占位符）
+- `syn-flood-detect.sh` - SYN Flood 检测脚本
+- `setup-syn-flood-cron.sh` - SYN Flood 定时任务设置脚本（可选）
 - `id_ed25519.pub` - SSH 公钥文件（需自行准备，已在 .gitignore 中）
 - `.gitignore` - Git 忽略文件配置
+- `SYN-FLOOD-CRON.md` - SYN Flood 检测定时任务详细文档
+- `FAIL2BAN.md` - Fail2ban 配置详细文档
+
 
 ## 配置详情
 

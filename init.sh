@@ -372,6 +372,52 @@ EOF
     echo "Fail2ban configured to use nftables."
 }
 
+# Setup SYN Flood Detection
+setup_syn_flood_detection() {
+    print_step "Setting up SYN Flood Detection..."
+    
+    # Install required dependencies
+    echo "Installing dependencies (conntrack-tools, whois)..."
+    $PM $PM_INSTALL conntrack whois
+    
+    # Check if syn-flood-detect.sh exists
+    if [ ! -f "./syn-flood-detect.sh" ]; then
+        echo "Warning: syn-flood-detect.sh not found in current directory. Skipping..."
+        return 0
+    fi
+    
+    # Copy script to /usr/local/bin
+    local script_path="/usr/local/bin/syn-flood-detect.sh"
+    cp ./syn-flood-detect.sh "$script_path"
+    chmod +x "$script_path"
+    echo "Script copied to: $script_path"
+    
+    # Create log files
+    touch /var/log/syn_flood_subnet.log
+    touch /var/log/syn_flood_cron.log
+    echo "Log files created."
+    
+    # Setup cron job (runs every 30 minutes)
+    local cron_job="*/5 * * * * $script_path >> /var/log/syn_flood_cron.log 2>&1"
+    
+    # Remove existing cron jobs for this script
+    crontab -l 2>/dev/null | grep -v "$script_path" | crontab - 2>/dev/null
+    
+    # Add new cron job
+    (crontab -l 2>/dev/null; echo "$cron_job") | crontab -
+    
+    echo "Cron job configured: runs every 30 minutes (at :00 and :30)"
+    echo "Cron log: /var/log/syn_flood_cron.log"
+    echo "Detection log: /var/log/syn_flood_subnet.log"
+    
+    # Verify cron job
+    if crontab -l 2>/dev/null | grep -q "$script_path"; then
+        echo "✓ SYN Flood Detection setup complete"
+    else
+        echo "⚠ Warning: Failed to verify cron job installation"
+    fi
+}
+
 
 
 # ============================================
@@ -396,6 +442,7 @@ main() {
     configure_ipv6
     configure_nftables
     setup_fail2ban
+    setup_syn_flood_detection
     
     # Final message
     print_section "VPS Initialization Complete"
@@ -407,6 +454,7 @@ main() {
     echo "  - Firewall: nftables (iptables removed)"
     echo "  - IPv6 Configuration: $ENABLE_IPV6"
     echo "  - Fail2ban: Configured (using nftables)"
+    echo "  - SYN Flood Detection: Enabled (runs every 30 minutes)"
     echo ""
     echo "⚠️  IMPORTANT: VERIFY SSH ACCESS BEFORE CLOSING THIS SESSION!"
     echo ""
@@ -418,3 +466,4 @@ main() {
 
 # Run main function
 main
+
