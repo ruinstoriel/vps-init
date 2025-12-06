@@ -418,7 +418,9 @@ setup_syn_flood_detection() {
     fi
 }
 
+custom_hook(){
 
+}
 
 # ============================================
 # Main Execution
@@ -443,7 +445,7 @@ main() {
     configure_nftables
     setup_fail2ban
     setup_syn_flood_detection
-    
+    custom_hook
     # Final message
     print_section "VPS Initialization Complete"
     echo ""
