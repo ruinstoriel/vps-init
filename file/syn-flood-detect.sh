@@ -5,16 +5,17 @@ CONNTRACK="/usr/sbin/conntrack"
 NFT="/usr/sbin/nft"
 WHOIS="/usr/bin/whois"
 
-LOG_FILE="/var/log/syn_flood_subnet.log"
-ERROR_LOG="/var/log/syn_flood_error.log"  # 错误日志
+LOG_FILE="/var/log/syn_flood.log"
 CACHE_FILE="/var/run/known_subnets.txt"
 THRESHOLD=40
 
 # 错误处理函数
 log_error() {
-    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: $1" >> "$ERROR_LOG"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') ERROR: $1" >> "$LOG_FILE"
 }
-
+log_info() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') INFO: $1" >> "$LOG_FILE"
+}
 # 检查关键命令
 if [ ! -x "$CONNTRACK" ]; then
     log_error "conntrack not found or not executable at $CONNTRACK"
@@ -32,9 +33,36 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
-touch "$CACHE_FILE" "$LOG_FILE" "$ERROR_LOG" 2>/dev/null || {
+touch "$CACHE_FILE" "$LOG_FILE" 2>/dev/null || {
     log_error "Cannot create log files"
     exit 1
+}
+
+# 将IP范围转换为CIDR格式
+convert_ip_range_to_cidr() {
+    local start_ip=$1
+    local end_ip=$2
+    
+    # 将IP转换为整数
+    IFS=. read -r a b c d <<< "$start_ip"
+    local start_int=$((a * 256**3 + b * 256**2 + c * 256 + d))
+    
+    IFS=. read -r a b c d <<< "$end_ip"
+    local end_int=$((a * 256**3 + b * 256**2 + c * 256 + d))
+    
+    # 计算范围大小
+    local range_size=$((end_int - start_int + 1))
+    
+    # 计算最接近的CIDR掩码
+    local mask=32
+    local power=1
+    while [ $power -lt $range_size ] && [ $mask -gt 0 ]; do
+        power=$((power * 2))
+        mask=$((mask - 1))
+    done
+    
+    # 返回CIDR格式
+    echo "${start_ip}/${mask}"
 }
 
 # 检查IP是否在已知网段内
@@ -52,7 +80,7 @@ ip_in_cached_subnets() {
         mask_int=$(( (0xFFFFFFFF << (32 - mask)) & 0xFFFFFFFF ))
         
         if [ $((ip_int & mask_int)) -eq $((net_int & mask_int)) ]; then
-            echo "$subnet"
+            log_info "IP $ip is in subnet $subnet"
             return 0
         fi
     done < "$CACHE_FILE"
@@ -115,11 +143,33 @@ for ip in $suspicious_ips; do
     
     if [ -z "$subnet" ]; then
         # whois查询
-        subnet=$(timeout 3 $WHOIS "$ip" 2>/dev/null | \
+        whois_output=$(timeout 3 $WHOIS "$ip" 2>/dev/null)
+        
+        # 首先尝试获取CIDR格式
+        subnet=$(echo "$whois_output" | \
             grep -iE "^(CIDR|inetnum):" | \
             head -1 | \
             awk '{print $NF}' | \
             grep -E '^[0-9.]+/[0-9]+$')
+        
+        # 如果没有CIDR格式，尝试获取IP范围格式
+        if [ -z "$subnet" ]; then
+            ip_range=$(echo "$whois_output" | \
+                grep -iE "^(inetnum|NetRange):" | \
+                head -1 | \
+                sed -E 's/^[^:]+:\s*//' | \
+                grep -E '^[0-9.]+ - [0-9.]+$')
+            
+            if [ -n "$ip_range" ]; then
+                # 提取起始和结束IP
+                start_ip=$(echo "$ip_range" | awk '{print $1}')
+                end_ip=$(echo "$ip_range" | awk '{print $3}')
+                
+                # 转换为CIDR格式
+                subnet=$(convert_ip_range_to_cidr "$start_ip" "$end_ip")
+                log_info "Converted IP range $ip_range to CIDR: $subnet"
+            fi
+        fi
         
         if [ -z "$subnet" ]; then
             subnet=$(echo "$ip" | awk -F. '{print $1"."$2"."$3".0/24"}')
@@ -137,7 +187,7 @@ done
 for subnet in "${!subnet_count[@]}"; do
     count=${subnet_count[$subnet]}
     if [ "$count" -ge "$THRESHOLD" ]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') SYN_FLOOD subnet=$subnet count=$count" >> "$LOG_FILE"
+        log_info "$(date '+%Y-%m-%d %H:%M:%S') SYN_FLOOD subnet=$subnet count=$count"
         
         # 尝试封禁并检查结果
         nft_output=$($NFT add element inet filter ipv4_block { "$subnet" } 2>&1)

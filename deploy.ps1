@@ -1,4 +1,7 @@
-dos2unix init.sh nftables.conf id_ed25519.pub nftables-common.local syn-flood-detect.sh
-$dest = ${stun}
-scp  -P 2200 init.sh nftables.conf id_ed25519.pub nftables-common.local syn-flood-detect.sh root@${dest}:~
-ssh  -p 2200 root@${dest} 'chmod +x ~/init.sh ~/syn-flood-detect.sh && ~/init.sh'
+dos2unix file/*
+$ssh_port = 2200
+
+@($stun, $color, $file) | Foreach-Object -ThrottleLimit 3 -Parallel {
+    scp  -P $using:ssh_port file/* root@${_}:~
+    ssh  -p $using:ssh_port root@${_} 'chmod +x ~/*.sh && ~/init.sh'
+}

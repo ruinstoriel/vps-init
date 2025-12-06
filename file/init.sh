@@ -417,11 +417,38 @@ setup_syn_flood_detection() {
         echo "⚠ Warning: Failed to verify cron job installation"
     fi
 }
-
-custom_hook(){
-
+# 执行文件中的函数（如果存在）
+execute_if_exists() {
+    local file="$1"
+    local func_name="$2"
+    shift 2  # 移除前两个参数，剩余的是函数参数
+    
+    # 检查文件
+    if [[ ! -f "$file" ]]; then
+        return 1
+    fi
+    
+    # 导入文件（在子shell中避免污染当前环境）
+    (
+        source "$file" 2>/dev/null || return 1
+        
+        # 检查函数是否存在
+        if declare -f "$func_name" > /dev/null 2>&1; then
+            # 执行函数并传递剩余参数
+            "$func_name" $@
+            return $?
+        else
+            return 2
+        fi
+    )
 }
-
+custome_hook(){
+    echo "Executing custom hooks..."
+    while IFS=" " read -r func_name args; do
+        execute_if_exists "custome_hook.sh" "$func_name" "$args"
+        # echo "Executing $func_name with args: $args"
+    done < "exec_fun.txt"
+}
 # ============================================
 # Main Execution
 # ============================================
@@ -445,7 +472,7 @@ main() {
     configure_nftables
     setup_fail2ban
     setup_syn_flood_detection
-    custom_hook
+    custome_hook
     # Final message
     print_section "VPS Initialization Complete"
     echo ""
