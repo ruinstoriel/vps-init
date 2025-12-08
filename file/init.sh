@@ -651,7 +651,7 @@ custome_hook(){
     while IFS=" " read -r func_name args; do
         execute_if_exists "custome_hook.sh" "$func_name" "$args"
         # echo "Executing $func_name with args: $args"
-    done < "exec_fun.txt"
+    done < "./exec_fun.txt"
 }
 # ============================================
 # Main Execution
