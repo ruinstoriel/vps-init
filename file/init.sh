@@ -24,6 +24,12 @@ TIMEZONE="Asia/Shanghai"
 # SSH Port
 SSH_PORT="2200"
 
+# Set to "true" to enable KCPtun SSH acceleration, "false" to skip
+ENABLE_KCPTUN="true"
+
+# KCPtun port (SSH_PORT + 1 by default)
+KCPTUN_PORT=$((SSH_PORT + 1))
+
 # Public key file
 PUB_KEY=$(<id_ed25519.pub)
 
@@ -294,6 +300,74 @@ EOF
     fi
 }
 
+# Configure TCP BBR congestion control
+configure_tcp_bbr() {
+    print_step "Configuring TCP BBR congestion control..."
+    
+    # Check kernel version (BBR requires kernel 4.9+)
+    local kernel_version=$(uname -r | cut -d. -f1)
+    local kernel_minor=$(uname -r | cut -d. -f2)
+    
+    if [ "$kernel_version" -lt 4 ] || ([ "$kernel_version" -eq 4 ] && [ "$kernel_minor" -lt 9 ]); then
+        echo "⚠ Warning: Kernel version $(uname -r) may not support BBR (requires 4.9+)"
+        echo "Skipping BBR configuration..."
+        return 0
+    fi
+    
+    # Load TCP BBR module
+    echo "Loading TCP BBR kernel module..."
+    modprobe tcp_bbr
+    
+    # Verify module is loaded
+    if ! lsmod | grep -q tcp_bbr; then
+        echo "⚠ Warning: Failed to load tcp_bbr module"
+        return 1
+    fi
+    
+    # Configure sysctl settings for BBR
+    echo "Configuring sysctl settings for BBR..."
+    
+    # Apply settings immediately
+    sysctl -w net.core.default_qdisc=fq
+    sysctl -w net.ipv4.tcp_congestion_control=bbr
+    
+    # Make changes persistent
+    cat > /etc/sysctl.d/99-bbr.conf << EOF
+# TCP BBR Congestion Control
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+    
+    echo "TCP BBR configuration file created: /etc/sysctl.d/99-bbr.conf"
+    
+    # Ensure module loads on boot
+    if ! grep -q "tcp_bbr" /etc/modules-load.d/modules.conf 2>/dev/null && \
+       ! grep -q "tcp_bbr" /etc/modules 2>/dev/null; then
+        
+        if [ -d /etc/modules-load.d ]; then
+            echo "tcp_bbr" > /etc/modules-load.d/bbr.conf
+            echo "Module auto-load configured: /etc/modules-load.d/bbr.conf"
+        else
+            echo "tcp_bbr" >> /etc/modules
+            echo "Module auto-load configured: /etc/modules"
+        fi
+    fi
+    
+    # Verify configuration
+    local current_qdisc=$(sysctl -n net.core.default_qdisc)
+    local current_cc=$(sysctl -n net.ipv4.tcp_congestion_control)
+    
+    if [ "$current_qdisc" = "fq" ] && [ "$current_cc" = "bbr" ]; then
+        echo "✓ TCP BBR enabled successfully"
+        echo "  - Queue discipline: $current_qdisc"
+        echo "  - Congestion control: $current_cc"
+    else
+        echo "⚠ Warning: BBR configuration may not be active"
+        echo "  - Current queue discipline: $current_qdisc (expected: fq)"
+        echo "  - Current congestion control: $current_cc (expected: bbr)"
+    fi
+}
+
 # Configure nftables
 configure_nftables() {
     print_step "Configuring nftables..."
@@ -310,10 +384,6 @@ configure_nftables() {
     # Fix Windows line endings (CRLF) which cause syntax errors
     sed -i 's/\r$//' "$NFT_CONF"
     
-    # Replace SSH_PORT placeholder with actual port
-    sed -i "s/{{SSH_PORT}}/$SSH_PORT/g" "$NFT_CONF"
-    echo "SSH port configured: $SSH_PORT"
-    
     chmod 600 "$NFT_CONF"
     
     # Update shebang in config file to match actual binary location
@@ -322,6 +392,10 @@ configure_nftables() {
     # Enable and start nftables
     systemctl enable nftables
     systemctl restart nftables
+    
+    # Add SSH_PORT to the allow_proto_port set dynamically
+    echo "Adding SSH port $SSH_PORT to allow_proto_port set..."
+    nft add element inet filter allow_proto_port { tcp . $SSH_PORT }
     
     echo "nftables installed and configured successfully."
 }
@@ -398,7 +472,7 @@ setup_syn_flood_detection() {
     echo "Log files created."
     
     # Setup cron job (runs every 30 minutes)
-    local cron_job="*/5 * * * * $script_path >> /var/log/syn_flood_cron.log 2>&1"
+    local cron_job="0,30 * * * * $script_path >> /var/log/syn_flood_cron.log 2>&1"
     
     # Remove existing cron jobs for this script
     crontab -l 2>/dev/null | grep -v "$script_path" | crontab - 2>/dev/null
@@ -417,6 +491,136 @@ setup_syn_flood_detection() {
         echo "⚠ Warning: Failed to verify cron job installation"
     fi
 }
+
+# Setup KCPtun for SSH acceleration
+setup_kcptun() {
+    if [ "$ENABLE_KCPTUN" != "true" ]; then
+        print_step "KCPtun installation skipped (ENABLE_KCPTUN=$ENABLE_KCPTUN)"
+        return 0
+    fi
+    
+    print_step "Setting up KCPtun for SSH acceleration..."
+    
+    # Detect system architecture
+    local arch=$(uname -m)
+    local kcptun_arch=""
+    
+    case "$arch" in
+        x86_64)
+            kcptun_arch="amd64"
+            ;;
+        aarch64|arm64)
+            kcptun_arch="arm64"
+            ;;
+        armv7l)
+            kcptun_arch="arm7"
+            ;;
+        *)
+            echo "⚠ Warning: Unsupported architecture: $arch"
+            echo "Skipping KCPtun installation..."
+            return 0
+            ;;
+    esac
+    
+    echo "Detected architecture: $arch (kcptun: linux_$kcptun_arch)"
+    
+    # Download and install KCPtun
+    echo "Downloading KCPtun..."
+    cd /tmp
+    
+    # Download using the official script
+    if ! curl -L https://raw.githubusercontent.com/xtaci/kcptun/master/download.sh | sh; then
+        echo "⚠ Warning: Failed to download KCPtun"
+        return 1
+    fi
+    
+    # Find the downloaded tar.gz file
+    local kcptun_file=$(ls -t kcptun-linux-${kcptun_arch}-*.tar.gz 2>/dev/null | head -n1)
+    
+    if [ -z "$kcptun_file" ]; then
+        echo "⚠ Warning: KCPtun archive not found"
+        return 1
+    fi
+    
+    echo "Found KCPtun archive: $kcptun_file"
+    
+    # Extract the archive
+    echo "Extracting KCPtun..."
+    tar -xzf "$kcptun_file"
+    
+    # Install server binary
+    if [ -f "server_linux_${kcptun_arch}" ]; then
+        mv "server_linux_${kcptun_arch}" /usr/local/bin/kcptun-server
+        chmod +x /usr/local/bin/kcptun-server
+        echo "✓ KCPtun server installed to /usr/local/bin/kcptun-server"
+    else
+        echo "⚠ Warning: KCPtun server binary not found"
+        return 1
+    fi
+    
+    # Clean up
+    rm -f "$kcptun_file" client_linux_${kcptun_arch}
+    
+    # Create systemd service
+    echo "Creating systemd service..."
+    cat > /etc/systemd/system/kcptun.service << EOF
+[Unit]
+Description=KCPtun Server for SSH Acceleration
+After=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/kcptun-server \\
+    -t "127.0.0.1:${SSH_PORT}" \\
+    -l ":${KCPTUN_PORT}" \\
+    -mode fast3 \\
+    -nocomp \\
+    -sockbuf 16777217 \\
+    -dscp 46
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    echo "✓ Systemd service created: /etc/systemd/system/kcptun.service"
+    
+    # Add KCPtun port to nftables
+    echo "Adding KCPtun port $KCPTUN_PORT (UDP) to firewall..."
+    if command -v nft &> /dev/null && nft list table inet filter &> /dev/null 2>&1; then
+        nft add element inet filter allow_proto_port { udp . $KCPTUN_PORT }
+        echo "✓ KCPtun port added to nftables"
+    else
+        echo "⚠ Warning: nftables not available, skipping firewall configuration"
+    fi
+    
+    # Enable and start service
+    systemctl daemon-reload
+    systemctl enable kcptun
+    systemctl start kcptun
+    
+    # Verify service status
+    if systemctl is-active --quiet kcptun; then
+        echo "✓ KCPtun service started successfully"
+        echo ""
+        echo "KCPtun Configuration:"
+        echo "  - Server Port (UDP): $KCPTUN_PORT"
+        echo "  - Target SSH Port: $SSH_PORT"
+        echo "  - Mode: fast3"
+        echo ""
+        echo "Client connection example:"
+        echo "  ./client_linux_amd64 -r \"SERVER_IP:$KCPTUN_PORT\" -l \":$SSH_PORT\" -mode fast3 -nocomp -autoexpire 900 -sockbuf 16777217 -dscp 46"
+        echo ""
+    else
+        echo "⚠ Warning: KCPtun service failed to start"
+        echo "Check logs with: journalctl -u kcptun -n 50"
+    fi
+}
+
 # 执行文件中的函数（如果存在）
 execute_if_exists() {
     local file="$1"
@@ -469,9 +673,11 @@ main() {
     configure_ssh_hardening
     setup_firewall
     configure_ipv6
+    configure_tcp_bbr
     configure_nftables
     setup_fail2ban
     setup_syn_flood_detection
+    setup_kcptun
     custome_hook
     # Final message
     print_section "VPS Initialization Complete"
@@ -482,8 +688,10 @@ main() {
     echo "  - SSH Authentication: Key-only (password disabled)"
     echo "  - Firewall: nftables (iptables removed)"
     echo "  - IPv6 Configuration: $ENABLE_IPV6"
+    echo "  - TCP BBR: Enabled (congestion control optimized)"
     echo "  - Fail2ban: Configured (using nftables)"
     echo "  - SYN Flood Detection: Enabled (runs every 30 minutes)"
+    echo "  - KCPtun SSH Acceleration: $ENABLE_KCPTUN (Port: $KCPTUN_PORT UDP)"
     echo ""
     echo "⚠️  IMPORTANT: VERIFY SSH ACCESS BEFORE CLOSING THIS SESSION!"
     echo ""
