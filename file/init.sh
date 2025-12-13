@@ -68,6 +68,56 @@ validate_public_key() {
     fi
 }
 
+# Wait for package manager lock to be released
+wait_for_lock() {
+    # Only relevant for apt-get (dpkg)
+    if [ "$PM" != "apt-get" ]; then
+        return
+    fi
+    
+    local i=0
+    local max_wait=300 # 5 minutes
+    local locked=false
+    
+    while true; do
+        locked=false
+        
+        # Check using fuser if available (most reliable for file locks)
+        if command -v fuser >/dev/null 2>&1; then
+            if fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+               fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+               fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then
+                locked=true
+            fi
+        # Fallback to checking process names if fuser is missing
+        elif pgrep -f "apt|apt-get|dpkg|unattended-upgr" >/dev/null 2>&1; then
+             # Simple check for running processes
+             if ps -A | grep -E 'apt|dpkg' | grep -v "grep" > /dev/null 2>&1; then
+                locked=true
+             fi
+        fi
+        
+        if [ "$locked" = "false" ]; then
+            if [ $i -gt 0 ]; then
+                echo "Lock released. Resuming."
+            fi
+            break
+        fi
+        
+        if [ $i -eq 0 ]; then
+            echo "Waiting for package manager lock to be released..."
+        fi
+        
+        sleep 5
+        i=$((i + 5))
+        
+        if [ $i -ge $max_wait ]; then
+            echo "⚠ Warning: Waited too long ($max_wait s) for lock. Proceeding anyway..."
+            break
+        fi
+    done
+}
+
 # ============================================
 # Core Functions
 # ============================================
@@ -146,8 +196,9 @@ configure_ssh_hardening() {
 # Detect and set package manager variables
 detect_package_manager() {
     if command -v apt-get &> /dev/null; then
+        export DEBIAN_FRONTEND=noninteractive
         PM="apt-get"
-        PM_INSTALL="install -y"
+        PM_INSTALL="install -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
         PM_REMOVE="remove -y --purge"
         PM_UPDATE="update"
         NFT_CONF="/etc/nftables.conf"
@@ -178,6 +229,7 @@ setup_firewall() {
     print_step "Managing firewalls..."
     
     # Update package list
+    wait_for_lock
     $PM $PM_UPDATE
     
     # Stop and disable other firewalls FIRST
@@ -330,7 +382,8 @@ configure_tcp_bbr() {
     # Apply settings immediately
     sysctl -w net.core.default_qdisc=fq
     sysctl -w net.ipv4.tcp_congestion_control=bbr
-    
+    tc qdisc replace dev eth0 root fq
+    tc qdisc list dev eth0
     # Make changes persistent
     cat > /etc/sysctl.d/99-bbr.conf << EOF
 # TCP BBR Congestion Control
@@ -405,6 +458,7 @@ setup_fail2ban() {
     print_step "Installing Fail2ban..."
     
     # Install Fail2ban
+    wait_for_lock
     $PM $PM_INSTALL fail2ban
     
     # Verify installation
@@ -452,6 +506,7 @@ setup_syn_flood_detection() {
     
     # Install required dependencies
     echo "Installing dependencies (conntrack-tools, whois)..."
+    wait_for_lock
     $PM $PM_INSTALL conntrack whois
     
     # Check if syn-flood-detect.sh exists
@@ -651,7 +706,7 @@ custome_hook(){
     while IFS=" " read -r func_name args; do
         execute_if_exists "custome_hook.sh" "$func_name" "$args"
         # echo "Executing $func_name with args: $args"
-    done < "./exec_fun.txt"
+    done < "/root/exec_fun.txt"
 }
 # ============================================
 # Main Execution
