@@ -306,7 +306,14 @@ configure_nftables() {
     # Add SSH_PORT to the allow_proto_port set dynamically
     echo "Adding SSH port $SSH_PORT to allow_proto_port set..."
     nft add element inet filter allow_proto_port { tcp . $SSH_PORT }
-    
+    cat > /etc/nftables.d/ssh.nft << EOF
+table inet filter {
+    set allow_proto_port {
+        type inet_proto . inet_service
+        elements = { tcp . $SSH_PORT }
+    }
+}
+EOF
     echo "nftables installed and configured successfully."
 }
 
@@ -516,6 +523,15 @@ EOF
     echo "Adding KCPtun port $KCPTUN_PORT (UDP) to firewall..."
     if command -v nft &> /dev/null && nft list table inet filter &> /dev/null 2>&1; then
         nft add element inet filter allow_proto_port { udp . $KCPTUN_PORT }
+        cat > /etc/nftables.d/kcptun.nft << EOF
+table inet filter {
+    set allow_proto_port {
+        type inet_proto . inet_service
+        elements = { udp . $KCPTUN_PORT }
+    }
+}
+EOF
+
         echo "✓ KCPtun port added to nftables"
     else
         echo "⚠ Warning: nftables not available, skipping firewall configuration"
