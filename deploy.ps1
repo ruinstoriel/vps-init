@@ -1,8 +1,7 @@
 dos2unix file/*
-$ssh_port = 2200
+$ssh_port = 22
 
-@( $stun) | Foreach-Object -ThrottleLimit 3 -Parallel {
-    scp  -P $using:ssh_port file/* root@${_}:~
-    Write-Host "开始执行脚本"
-    ssh  -p $using:ssh_port root@${_} 'cd ~ && chmod +x ./*.sh && ./init.sh'
-}
+
+scp -o ConnectTimeout=60 -P $ssh_port file/* root@148.135.78.131:~
+Write-Host "start"
+ssh -o ConnectTimeout=60 -p $ssh_port root@148.135.78.131 'cd ~ && chmod +x ./*.sh && ./init.sh'

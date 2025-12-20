@@ -196,7 +196,7 @@ EOF
     sysctl -w net.ipv6.conf.all.disable_ipv6=0
     sysctl -w net.ipv6.conf.default.disable_ipv6=0
     sysctl -w net.ipv6.conf.lo.disable_ipv6=0
-    
+    sysctl -w net.ipv6.conf.eth0.disable_ipv6=0
     echo "IPv6 enabled with custom configuration."
     
     # Restart network service if available
@@ -299,21 +299,23 @@ configure_nftables() {
     # Update shebang in config file to match actual binary location
     sed -i "1s|^#!.*|#!$NFT_BIN -f|" "$NFT_CONF"
     mkdir -p /etc/nftables.d
+    
+    # Deploy SSH port configuration
+    echo "Deploying SSH port configuration..."
+    if [ ! -f "./ssh.nft" ]; then
+        echo "Error: ssh.nft not found in current directory."
+        exit 1
+    fi
+    
+    # Copy and substitute SSH_PORT placeholder
+    sed "s/SSH_PORT_PLACEHOLDER/$SSH_PORT/g" ./ssh.nft > /etc/nftables.d/ssh.nft
+    chmod 644 /etc/nftables.d/ssh.nft
+    echo "✓ SSH port $SSH_PORT configured in /etc/nftables.d/ssh.nft"
+    
     # Enable and start nftables
     systemctl enable nftables
     systemctl restart nftables
     
-    # Add SSH_PORT to the allow_proto_port set dynamically
-    echo "Adding SSH port $SSH_PORT to allow_proto_port set..."
-    nft add element inet filter allow_proto_port { tcp . $SSH_PORT }
-    cat > /etc/nftables.d/ssh.nft << EOF
-table inet filter {
-    set allow_proto_port {
-        type inet_proto . inet_service
-        elements = { tcp . $SSH_PORT }
-    }
-}
-EOF
     echo "nftables installed and configured successfully."
 }
 
@@ -522,17 +524,19 @@ EOF
     # Add KCPtun port to nftables
     echo "Adding KCPtun port $KCPTUN_PORT (UDP) to firewall..."
     if command -v nft &> /dev/null && nft list table inet filter &> /dev/null 2>&1; then
-        nft add element inet filter allow_proto_port { udp . $KCPTUN_PORT }
-        cat > /etc/nftables.d/kcptun.nft << EOF
-table inet filter {
-    set allow_proto_port {
-        type inet_proto . inet_service
-        elements = { udp . $KCPTUN_PORT }
-    }
-}
-EOF
-
-        echo "✓ KCPtun port added to nftables"
+        # Deploy KCP port configuration
+        if [ ! -f "./kcp.nft" ]; then
+            echo "⚠ Warning: kcp.nft not found in current directory, skipping firewall configuration"
+        else
+            # Copy and substitute KCPTUN_PORT placeholder
+            sed "s/KCPTUN_PORT_PLACEHOLDER/$KCPTUN_PORT/g" ./kcp.nft > /etc/nftables.d/kcp.nft
+            chmod 644 /etc/nftables.d/kcp.nft
+            
+            # Reload nftables to apply the new configuration
+            systemctl reload nftables || systemctl restart nftables
+            
+            echo "✓ KCPtun port $KCPTUN_PORT configured in /etc/nftables.d/kcp.nft"
+        fi
     else
         echo "⚠ Warning: nftables not available, skipping firewall configuration"
     fi
@@ -700,22 +704,9 @@ setup_warp() {
 # Setup ACME (Let's Encrypt)
 setup_acme() {
     if [ "$ENABLE_ACME" != "true" ]; then
-        print_step "ACME installation skipped (ENABLE_ACME=$ENABLE_ACME)"
+        print_step "Certificate setup skipped (ENABLE_ACME=$ENABLE_ACME)"
         return 0
     fi
-    
-    print_step "Setting up ACME (Let's Encrypt)..."
-    
-    # Check email configuration
-    if [ -z "$ACME_EMAIL" ] || [ "$ACME_EMAIL" = "admin@example.com" ]; then
-        echo "⚠ Warning: ACME_EMAIL is not set or using default. Please configure a valid email."
-        echo "Proceeding with installation strictly for acme.sh..."
-    fi
-    
-    # Install dependencies
-    echo "Installing dependencies (socat, cron)..."
-    wait_for_lock
-    $PM $PM_INSTALL socat cron
     
     # Create certificate directory
     if [ ! -d "$ACME_CERT_PATH" ]; then
@@ -724,61 +715,123 @@ setup_acme() {
         chmod 755 "$ACME_CERT_PATH"
     fi
     
-    # Install acme.sh
-    if [ ! -d "$HOME/.acme.sh" ]; then
-        echo "Installing acme.sh..."
-        curl https://get.acme.sh | sh -s email="$ACME_EMAIL"
+    # Check if domain is configured
+    if [ -z "$ACME_DOMAIN" ]; then
+        echo "ACME_DOMAIN is not set. Skipping certificate issuance."
+        return 0
+    fi
+    
+    # Check if certificate files already exist
+    if [ -f "$ACME_CERT_PATH/$ACME_DOMAIN.crt" ] && [ -f "$ACME_CERT_PATH/$ACME_DOMAIN.key" ]; then
+        echo "Certificate for $ACME_DOMAIN already exists."
+        echo "Certificate: $ACME_CERT_PATH/$ACME_DOMAIN.crt"
+        echo "Key: $ACME_CERT_PATH/$ACME_DOMAIN.key"
         
-        # Verify installation
-        if [ -f "$HOME/.acme.sh/acme.sh" ]; then
-            echo "✓ acme.sh installed successfully"
+        # Calculate and display pinSHA256 for existing certificate
+        echo ""
+        echo "Certificate pinSHA256:"
+        openssl x509 -noout -fingerprint -sha256  -in "$ACME_CERT_PATH/$ACME_DOMAIN.crt"
+        echo ""
+        return 0
+    fi
+    
+    # Self-signed certificate
+    if [ "$ACME_USE_SELFSIGNED" = "true" ]; then
+        print_step "Generating self-signed certificate for $ACME_DOMAIN..."
+        
+        # Generate private key
+        echo "Generating private key..."
+        openssl genrsa -out "$ACME_CERT_PATH/$ACME_DOMAIN.key" 2048
+        
+        # Generate self-signed certificate (valid for 10 years)
+        echo "Generating self-signed certificate (valid for 10 years)..."
+        openssl req -new -x509 -key "$ACME_CERT_PATH/$ACME_DOMAIN.key" \
+            -out "$ACME_CERT_PATH/$ACME_DOMAIN.crt" \
+            -days 3650 \
+            -subj "/CN=$ACME_DOMAIN"
+        
+        if [ -f "$ACME_CERT_PATH/$ACME_DOMAIN.crt" ] && [ -f "$ACME_CERT_PATH/$ACME_DOMAIN.key" ]; then
+            echo "✓ Self-signed certificate generated successfully"
+            echo ""
+            echo "Certificate: $ACME_CERT_PATH/$ACME_DOMAIN.crt"
+            echo "Key: $ACME_CERT_PATH/$ACME_DOMAIN.key"
+            echo ""
             
-            # Create alias manually for current session usage if needed
-            alias acme.sh="$HOME/.acme.sh/acme.sh"
-            
-            echo "Use 'acme.sh' command to manage certificates."
-            echo "Certificates will be stored in: $ACME_CERT_PATH (user configured location)" 
+            # Calculate and display pinSHA256
+            echo "=========================================="
+            echo "Certificate pinSHA256 (for certificate pinning):"
+            echo "=========================================="
+            local pin_sha256=$(openssl x509 -noout -fingerprint -sha256  -in "$ACME_CERT_PATH/$ACME_DOMAIN.crt")
+            echo "$pin_sha256"
+            echo "=========================================="
+            echo ""
+            echo "Use this pinSHA256 value for certificate pinning in your applications."
+            echo ""
         else
-            echo "Error: acme.sh installation failed."
+            echo "Error: Failed to generate self-signed certificate"
             return 1
         fi
     else
-        echo "acme.sh is already installed."
+        # Let's Encrypt certificate
+        print_step "Setting up Let's Encrypt certificate..."
+        
+        # Check email configuration
+        if [ -z "$ACME_EMAIL" ] || [ "$ACME_EMAIL" = "admin@example.com" ]; then
+            echo "⚠ Warning: ACME_EMAIL is not set or using default. Please configure a valid email."
+            echo "Proceeding with installation strictly for acme.sh..."
+        fi
+        
+        # Install dependencies
+        echo "Installing dependencies (socat, cron)..."
+        wait_for_lock
+        $PM $PM_INSTALL socat cron
+        
+        # Install acme.sh
+        if [ ! -d "$HOME/.acme.sh" ]; then
+            echo "Installing acme.sh..."
+            curl https://get.acme.sh | sh -s email="$ACME_EMAIL"
+            
+            # Verify installation
+            if [ -f "$HOME/.acme.sh/acme.sh" ]; then
+                echo "✓ acme.sh installed successfully"
+                
+                # Create alias manually for current session usage if needed
+                alias acme.sh="$HOME/.acme.sh/acme.sh"
+                
+                echo "Use 'acme.sh' command to manage certificates."
+                echo "Certificates will be stored in: $ACME_CERT_PATH (user configured location)" 
+            else
+                echo "Error: acme.sh installation failed."
+                return 1
+            fi
+        else
+            echo "acme.sh is already installed."
+        fi
+        
+        print_step "Issuing certificate for $ACME_DOMAIN..."
+        echo "Issuing certificate using standalone mode (Port 80)..."
+        # Stop any service listening on port 80 if necessary (though usually init.sh runs on fresh VPS)
+        # We assume port 80 is free or we might need to stop nginx/apache temporarily if they were installed.
+        # For this init script, we assume no web server is running yet.
+        
+        if "$HOME/.acme.sh/acme.sh" --server letsencrypt --issue -d "$ACME_DOMAIN" --standalone --httpport 80; then
+            echo "✓ Certificate issued successfully."
+            
+            # Install certificate
+            echo "Installing certificate to $ACME_CERT_PATH..."
+            "$HOME/.acme.sh/acme.sh"  --server letsencrypt --install-cert -d "$ACME_DOMAIN" \
+                --key-file       "$ACME_CERT_PATH/$ACME_DOMAIN.key"  \
+                --fullchain-file "$ACME_CERT_PATH/$ACME_DOMAIN.crt" \
+                --reloadcmd     "echo 'Certificate updated.'"
+                
+            echo "Certificate installed: $ACME_CERT_PATH/$ACME_DOMAIN.crt"
+            echo "Key installed: $ACME_CERT_PATH/$ACME_DOMAIN.key"
+        else
+            echo "Error: Failed to issue certificate for $ACME_DOMAIN"
+            return 1
+        fi
     fi
     
-    # Issue certificate if domain is configured
-    if [ -n "$ACME_DOMAIN" ]; then
-        print_step "Issuing certificate for $ACME_DOMAIN..."
-        
-        # Check if certificate already exists
-        if "$HOME/.acme.sh/acme.sh" --list | grep -q "$ACME_DOMAIN"; then
-            echo "Certificate for $ACME_DOMAIN already exists."
-        else
-            echo "Issuing certificate using standalone mode (Port 80)..."
-            # Stop any service listening on port 80 if necessary (though usually init.sh runs on fresh VPS)
-            # We assume port 80 is free or we might need to stop nginx/apache temporarily if they were installed.
-            # For this init script, we assume no web server is running yet.
-            
-            if "$HOME/.acme.sh/acme.sh" --issue -d "$ACME_DOMAIN" --standalone --httpport 80; then
-                echo "✓ Certificate issued successfully."
-                
-                # Install certificate
-                echo "Installing certificate to $ACME_CERT_PATH..."
-                "$HOME/.acme.sh/acme.sh" --install-cert -d "$ACME_DOMAIN" \
-                    --key-file       "$ACME_CERT_PATH/$ACME_DOMAIN.key"  \
-                    --fullchain-file "$ACME_CERT_PATH/$ACME_DOMAIN.crt" \
-                    --reloadcmd     "echo 'Certificate updated.'"
-                    
-                echo "Certificate installed: $ACME_CERT_PATH/$ACME_DOMAIN.crt"
-                echo "Key installed: $ACME_CERT_PATH/$ACME_DOMAIN.key"
-            else
-                echo "Error: Failed to issue certificate for $ACME_DOMAIN"
-            fi
-        fi
-    else
-        echo "ACME_DOMAIN is not set. Skipping certificate issuance."
-        echo "You can issue it manually later: acme.sh --issue -d <your-domain> --standalone"
-    fi
     chmod -R 755 "$ACME_CERT_PATH"
 }
 

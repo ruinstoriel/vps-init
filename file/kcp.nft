@@ -1,0 +1,6 @@
+#!/usr/sbin/nft -f
+# KCP Port Configuration
+# This file is included by /etc/nftables.conf
+# Deployed by vps-init script
+
+add element inet filter allow_proto_port { udp . KCPTUN_PORT_PLACEHOLDER }
