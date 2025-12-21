@@ -424,6 +424,7 @@ setup_kcptun() {
     
     # Detect system architecture
     local arch=$(uname -m)
+    local start_dir=$(pwd)
     local kcptun_arch=""
     
     # Use utility function for architecture detection if available, or fallback
@@ -521,6 +522,9 @@ EOF
     
     echo "✓ Systemd service created: /etc/systemd/system/kcptun.service"
     
+    # Restore original directory to find kcp.nft
+    cd "$start_dir"
+
     # Add KCPtun port to nftables
     echo "Adding KCPtun port $KCPTUN_PORT (UDP) to firewall..."
     if command -v nft &> /dev/null && nft list table inet filter &> /dev/null 2>&1; then
