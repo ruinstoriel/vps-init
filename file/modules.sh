@@ -242,6 +242,7 @@ configure_tcp_bbr() {
     sysctl -w net.ipv4.tcp_fastopen=3
     tc qdisc replace dev eth0 root fq
     tc qdisc list dev eth0
+    ifconfig eth0 txqueuelen 5000
     # Make changes persistent
     cat > /etc/sysctl.d/99-bbr.conf << EOF
 # TCP BBR Congestion Control
@@ -277,6 +278,22 @@ EOF
         echo "⚠ Warning: BBR configuration may not be active"
         echo "  - Current queue discipline: $current_qdisc (expected: fq)"
         echo "  - Current congestion control: $current_cc (expected: bbr)"
+    fi
+    
+    # Set txqueuelen for eth0
+    if [ -f "/etc/network/interfaces" ]; then
+        echo "Configuring txqueuelen for eth0..."
+        if grep -q "iface eth0" /etc/network/interfaces; then
+            if ! grep -q "txqueuelen 5000" /etc/network/interfaces; then
+                # Insert after iface eth0 line, verifying alignment
+                sed -i '/iface eth0/a \    up ifconfig eth0 txqueuelen 5000' /etc/network/interfaces
+                echo "✓ Added txqueuelen 5000 to /etc/network/interfaces"
+            else
+                echo "txqueuelen already configured in /etc/network/interfaces"
+            fi
+        else
+            echo "Interface eth0 not found in /etc/network/interfaces, skipping txqueuelen config."
+        fi
     fi
 }
 
