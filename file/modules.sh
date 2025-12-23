@@ -239,6 +239,7 @@ configure_tcp_bbr() {
     # Apply settings immediately
     sysctl -w net.core.default_qdisc=fq
     sysctl -w net.ipv4.tcp_congestion_control=bbr
+    sysctl -w net.ipv4.tcp_fastopen=3
     tc qdisc replace dev eth0 root fq
     tc qdisc list dev eth0
     # Make changes persistent
@@ -246,6 +247,7 @@ configure_tcp_bbr() {
 # TCP BBR Congestion Control
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_fastopen = 3
 EOF
     
     echo "TCP BBR configuration file created: /etc/sysctl.d/99-bbr.conf"
