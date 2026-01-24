@@ -197,6 +197,15 @@ EOF
     sysctl -w net.ipv6.conf.default.disable_ipv6=0
     sysctl -w net.ipv6.conf.lo.disable_ipv6=0
     sysctl -w net.ipv6.conf.eth0.disable_ipv6=0
+    cat >> /etc/gai.conf << EOF
+precedence  ::1/128       50
+precedence  ::/0          40
+precedence  2002::/16     30
+precedence ::/96          20
+precedence ::ffff:0:0/96  10
+EOF
+
+    getent ahosts google.com
     echo "IPv6 enabled with custom configuration."
     
     # Restart network service if available
@@ -241,7 +250,9 @@ configure_tcp_bbr() {
     sysctl -w net.ipv4.tcp_congestion_control=bbr
     sysctl -w net.ipv4.tcp_fastopen=3
     tc qdisc replace dev eth0 root fq
+    tc qdisc change dev eth0 root fq flow_limit 3000
     tc qdisc list dev eth0
+    
     ifconfig eth0 txqueuelen 5000
     # Make changes persistent
     cat > /etc/sysctl.d/99-bbr.conf << EOF
